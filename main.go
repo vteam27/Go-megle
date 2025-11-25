@@ -413,16 +413,11 @@ func handleSignal(c *Client, data json.RawMessage) {
 
 // --- Client Write Pump ---
 func (c *Client) writePump() {
-	for {
-		select {
-		case message, ok := <-c.Send:
-			if !ok {
-				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-			c.Conn.WriteMessage(websocket.TextMessage, message)
-		}
+	for message := range c.Send {
+		c.Conn.WriteMessage(websocket.TextMessage, message)
 	}
+	// Channel closed, send close control message and return
+	c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 }
 
 // Helper

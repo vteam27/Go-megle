@@ -94,7 +94,7 @@ In a naive implementation, if User A and User B request a match simultaneously, 
 
 ### Prerequisites
 
-- Go 1.20+ (recommended)
+- Go 1.21+ (recommended)
 - Node.js + npm (for frontend dev/build)
 - Docker & Docker Compose (optional — for running Redis locally)
 
