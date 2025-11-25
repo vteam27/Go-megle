@@ -1,0 +1,35 @@
+# Binary
+/*.exe
+/*.exe~
+/*.dll
+/*.so
+/*.dylib
+/*.test
+
+# Vendor
+/vendor/
+
+# Go stuff
+*.out
+*.test
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+.env
+
+# Node
+node_modules/
+dist/
+
+# Frontend build and modules
+web/node_modules/
+web/dist/

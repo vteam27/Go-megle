@@ -1,0 +1,11 @@
+{
+  "name": "omegle-clone",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"go run .\" \"cd web && npm run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0"
+  }
+}
