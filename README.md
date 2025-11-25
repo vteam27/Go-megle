@@ -1,11 +1,3 @@
-Here is a professional, **resume-ready README.md** file.
-
-I have included a **Mermaid.js** diagram (which renders automatically on GitHub) and a "Design Decisions" section that explicitly highlights the architectural choices we discussed (Redis vs. Kafka, Concurrency, etc.).
-
-Copy the content below into a file named `README.md` in your project root.
-
-***
-
 # Go-Megle (Omegle Clone)
 
 ![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
@@ -48,23 +40,25 @@ sequenceDiagram
     UserB->>Server: Answer (SDP)
     Server->>UserA: Relay Answer
     
-    UserA<->UserB: Direct WebRTC Video Stream (P2P)
+    UserA-)UserB: Direct WebRTC Video Stream (P2P)
+    UserB-)UserA: Direct WebRTC Video Stream (P2P)
 ```
 
 ## 🚀 Key Features
 
 *   **Atomic Matchmaking:** Uses custom Redis Lua scripts to ensure O(1) matching complexity and prevent race conditions (e.g., two users grabbing the same partner simultaneously).
-*   **WebRTC Signaling:** Full implementation of the Offer/Answer/ICE Candidate exchange via WebSockets.
+*   **Cross-Instance Coordination:** Redis persistence and Pub/Sub enable horizontal scaling across multiple server instances while maintaining match state consistency.
+*   **WebRTC Signaling:** Full implementation of the Offer/Answer/ICE Candidate exchange via WebSockets with cross-instance relay support.
 *   **Concurrency:** Leverages Go's Goroutines and Channels to handle thousands of concurrent WebSocket connections with minimal memory footprint.
-*   **Zero-Persistence:** Designed for anonymity; no user data is stored on disk. Chat sessions are ephemeral.
-*   **Graceful Handling:** Handles user disconnections and "Skip" actions by cleaning up Redis Sets immediately.
+*   **Zero-Persistence:** Designed for anonymity; no user data is stored on disk. Match metadata expires after 10 minutes via Redis TTL.
+*   **Graceful Handling:** Handles user disconnections and "Skip" actions by cleaning up Redis Sets and notifying partners across all instances immediately.
 
 ---
 
 ## 🛠 Tech Stack
 
 *   **Backend:** Go (Golang), Gorilla WebSockets
-*   **Database:** Redis (Sets, Lua Scripting)
+*   **Database:** Redis (Sets, Lua Scripting, Pub/Sub, Hash persistence with TTL)
 *   **Frontend:** Vanilla JavaScript, HTML5, WebRTC API
 *   **Infrastructure:** Docker, Docker Compose
 
@@ -85,6 +79,14 @@ In a naive implementation, if User A and User B request a match simultaneously, 
 ### 3. Go vs. Node.js
 *   **Decision:** Go was chosen for the Signaling Server.
 *   **Reasoning:** While Node.js is excellent for I/O, Go's **Goroutines** allow us to handle each WebSocket connection in a lightweight thread (approx 2KB stack size). This allows vertical scaling to tens of thousands of connections on a single instance before needing to shard.
+
+### 4. Horizontal Scaling with Redis Persistence & Pub/Sub
+*   **Challenge:** When deploying multiple server instances behind a load balancer, clients in a match may be connected to different servers.
+*   **Solution:** 
+  - **Match Persistence:** Active matches are stored in Redis as Hashes (`match:<id>`) with a 10-minute TTL to survive instance restarts and enable cross-instance lookups.
+  - **Pub/Sub Signaling:** WebRTC signals (SDP offers/answers, ICE candidates) are published to a Redis channel (`signals`) so any instance can relay messages to the correct client.
+  - **Disconnect Handling:** When a client disconnects, the server checks both in-memory state and Redis to notify the partner, even if they're on a different instance.
+*   **Impact:** The system can now scale horizontally without losing match state or breaking active video sessions during deployments.
 
 ---
 

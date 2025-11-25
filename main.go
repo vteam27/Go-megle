@@ -107,7 +107,10 @@ func main() {
 	// 2. Start Hub Routine
 	go hub.run()
 
-	// 3. Define Routes
+	// 3. Start Redis Pub/Sub listener for cross-instance signaling
+	go startPubSubListener()
+
+	// 4. Define Routes
 	http.HandleFunc("/ws", serveWs)
 
 	// Serve built frontend if present (web/dist). Otherwise fall back to the demo index.html
@@ -144,9 +147,27 @@ func (h *Hub) run() {
 			h.mu.Lock()
 			if _, ok := h.Clients[client.ID]; ok {
 				// If in a match, notify partner
-				if client.CurrentMatch != "" {
-					matchID := client.CurrentMatch
+				matchID := client.CurrentMatch
+
+				// If no match in memory, check Redis (cross-instance support)
+				if matchID == "" {
+					if redisMatchID, ok := getClientMatchID(client.ID); ok {
+						matchID = redisMatchID
+					}
+				}
+
+				if matchID != "" {
+					// Try to get match from memory first
 					pair, ok := h.Matches[matchID]
+					if !ok {
+						// If not in memory, try Redis
+						a, b, found := getMatchFromRedis(matchID)
+						if found {
+							pair = [2]string{a, b}
+							ok = true
+						}
+					}
+
 					if ok {
 						var partnerID string
 						if pair[0] == client.ID {
@@ -155,18 +176,23 @@ func (h *Hub) run() {
 							partnerID = pair[0]
 						}
 
+						// Try to notify local partner
 						if partner, ok := h.Clients[partnerID]; ok {
 							sendJSON(partner, "partner_left", map[string]string{"from": client.ID})
 							partner.CurrentMatch = ""
 						}
+
+						// Remove match from both memory and Redis
 						delete(h.Matches, matchID)
+						deleteMatchFromRedis(matchID, pair[0], pair[1])
 					}
 				}
 
 				delete(h.Clients, client.ID)
 				close(client.Send)
-				// Cleanup Redis
+				// Cleanup Redis queue and match references
 				redisClient.SRem(ctx, "queue:general", client.ID)
+				redisClient.Del(ctx, fmt.Sprintf("client:%s:match", client.ID))
 			}
 			h.mu.Unlock()
 			log.Printf("Client Disconnected: %s", client.ID)
@@ -175,6 +201,7 @@ func (h *Hub) run() {
 }
 
 // createMatch links two client IDs into a match and updates their CurrentMatch.
+// Also persists the match to Redis with a 10-minute TTL.
 func (h *Hub) createMatch(aID, bID string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -188,10 +215,15 @@ func (h *Hub) createMatch(aID, bID string) string {
 		b.CurrentMatch = matchID
 		b.Status = "matched"
 	}
+
+	// Persist match to Redis for cross-instance coordination
+	persistMatchToRedis(matchID, aID, bID)
+
 	return matchID
 }
 
 // removeMatch removes a match by ID and clears clients' CurrentMatch fields.
+// Also removes the match from Redis.
 func (h *Hub) removeMatch(matchID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -206,6 +238,9 @@ func (h *Hub) removeMatch(matchID string) {
 		}
 	}
 	delete(h.Matches, matchID)
+
+	// Remove from Redis
+	deleteMatchFromRedis(matchID, pair[0], pair[1])
 }
 
 // --- WebSocket Handler ---
@@ -335,13 +370,27 @@ func handleSignal(c *Client, data json.RawMessage) {
 	var signal SignalData
 	json.Unmarshal(data, &signal)
 
+	// Prepare signal message for Pub/Sub
+	sigMsg := SignalMessage{
+		TargetID: signal.TargetID,
+		SenderID: c.ID,
+		Type:     signal.Type,
+		Payload:  signal.Payload,
+	}
+
+	// Publish to Redis Pub/Sub for cross-instance delivery
+	msgBytes, _ := json.Marshal(sigMsg)
+	if err := redisClient.Publish(ctx, "signals", msgBytes).Err(); err != nil {
+		log.Printf("Failed to publish signal to Redis: %v", err)
+	}
+
+	// Also try local delivery (optimization for same-instance)
 	hub.mu.RLock()
 	target, ok := hub.Clients[signal.TargetID]
 	hub.mu.RUnlock()
 
 	if ok {
-		// Forward the signal to the specific target
-		// We wrap it back in a Message struct
+		// Forward the signal to the specific target locally
 		outEvent := "signal"
 		outPayload := map[string]interface{}{
 			"sender_id": c.ID,
@@ -386,4 +435,109 @@ func sendJSON(c *Client, event string, data interface{}) {
 func serveHome(w http.ResponseWriter, r *http.Request) {
 	// Serve the development frontend entry (Vite) when no built dist is present.
 	http.ServeFile(w, r, "web/index.html")
+}
+
+// --- Redis Persistence Functions ---
+
+// persistMatchToRedis stores match metadata in Redis with 10-minute TTL
+func persistMatchToRedis(matchID, aID, bID string) {
+	pipe := redisClient.Pipeline()
+
+	// Store match metadata: match:<matchID> -> {a: aID, b: bID}
+	pipe.HSet(ctx, fmt.Sprintf("match:%s", matchID), "a", aID, "b", bID)
+	pipe.Expire(ctx, fmt.Sprintf("match:%s", matchID), 10*time.Minute)
+
+	// Store reverse mapping: client:<clientID>:match -> matchID
+	pipe.Set(ctx, fmt.Sprintf("client:%s:match", aID), matchID, 10*time.Minute)
+	pipe.Set(ctx, fmt.Sprintf("client:%s:match", bID), matchID, 10*time.Minute)
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("Failed to persist match to Redis: %v", err)
+	}
+}
+
+// deleteMatchFromRedis removes match metadata from Redis
+func deleteMatchFromRedis(matchID, aID, bID string) {
+	pipe := redisClient.Pipeline()
+	pipe.Del(ctx, fmt.Sprintf("match:%s", matchID))
+	pipe.Del(ctx, fmt.Sprintf("client:%s:match", aID))
+	pipe.Del(ctx, fmt.Sprintf("client:%s:match", bID))
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("Failed to delete match from Redis: %v", err)
+	}
+}
+
+// getMatchFromRedis retrieves match metadata from Redis
+func getMatchFromRedis(matchID string) (string, string, bool) {
+	result := redisClient.HGetAll(ctx, fmt.Sprintf("match:%s", matchID))
+	data, err := result.Result()
+	if err != nil || len(data) == 0 {
+		return "", "", false
+	}
+	return data["a"], data["b"], true
+}
+
+// getClientMatchID retrieves the matchID for a client from Redis
+func getClientMatchID(clientID string) (string, bool) {
+	result := redisClient.Get(ctx, fmt.Sprintf("client:%s:match", clientID))
+	matchID, err := result.Result()
+	if err != nil {
+		return "", false
+	}
+	return matchID, true
+}
+
+// --- Redis Pub/Sub for Cross-Instance Signaling ---
+
+// SignalMessage represents a signaling message to be published/subscribed
+type SignalMessage struct {
+	TargetID string          `json:"target_id"`
+	SenderID string          `json:"sender_id"`
+	Type     string          `json:"type"`
+	Payload  json.RawMessage `json:"payload"`
+}
+
+// startPubSubListener subscribes to Redis 'signals' channel and forwards messages to local clients
+func startPubSubListener() {
+	pubsub := redisClient.Subscribe(ctx, "signals")
+	defer pubsub.Close()
+
+	log.Println("Redis Pub/Sub listener started on channel 'signals'")
+
+	for {
+		msg, err := pubsub.ReceiveMessage(ctx)
+		if err != nil {
+			log.Printf("Pub/Sub error: %v", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		var sigMsg SignalMessage
+		if err := json.Unmarshal([]byte(msg.Payload), &sigMsg); err != nil {
+			log.Printf("Invalid signal message from Pub/Sub: %v", err)
+			continue
+		}
+
+		// Check if target is connected to this instance
+		hub.mu.RLock()
+		target, ok := hub.Clients[sigMsg.TargetID]
+		hub.mu.RUnlock()
+
+		if ok {
+			// Forward to local client
+			outPayload := map[string]interface{}{
+				"sender_id": sigMsg.SenderID,
+				"type":      sigMsg.Type,
+				"payload":   sigMsg.Payload,
+			}
+
+			finalBytes, _ := json.Marshal(map[string]interface{}{
+				"event": "signal",
+				"data":  outPayload,
+			})
+
+			target.Send <- finalBytes
+		}
+	}
 }

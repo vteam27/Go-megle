@@ -2,9 +2,17 @@ package main
 
 import (
 	"testing"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestCreateAndRemoveMatch(t *testing.T) {
+	// Initialize a mock/test Redis client (or use miniredis for a real in-memory Redis)
+	// For this test, we'll initialize redisClient to avoid nil pointer
+	redisClient = redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+
 	// Create a fresh hub
 	h := &Hub{
 		Clients:    make(map[string]*Client),
