@@ -100,8 +100,12 @@ var matchScript = redis.NewScript(`
 
 func main() {
 	// 1. Initialize Redis
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
 	redisClient = redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
+		Addr: redisAddr,
 	})
 
 	// 2. Start Hub Routine

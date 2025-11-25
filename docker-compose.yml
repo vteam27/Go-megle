@@ -2,8 +2,8 @@ version: '3.8'
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Port 6379 only exposed internally to app container, not to host
+    # Remove port mapping to avoid conflict with local Redis
     volumes:
       - redis-data:/data
 
