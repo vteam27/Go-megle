@@ -8,7 +8,7 @@ export default function VideoChat() {
     const [status, setStatus] = useState("Connecting to server...");
     const [localStream, setLocalStream] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
-    
+
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
     const wsRef = useRef(null);
@@ -71,9 +71,9 @@ export default function VideoChat() {
     const findMatch = useCallback(() => {
         if (currentPartnerIdRef.current) {
             try {
-                wsRef.current.send(JSON.stringify({ 
-                    event: "leave", 
-                    data: { target_id: currentPartnerIdRef.current } 
+                wsRef.current.send(JSON.stringify({
+                    event: "leave",
+                    data: { target_id: currentPartnerIdRef.current }
                 }));
             } catch (e) {
                 console.warn('Failed to notify partner about leaving', e);
@@ -176,16 +176,25 @@ export default function VideoChat() {
 
     return (
         <div>
-            <div className="status">{status}</div>
-            
+            <div className={`status ${status.includes('Waiting') ? 'waiting' : status.includes('Connected') || status.includes('Match Found') ? 'connected' : ''}`}>
+                {status}
+                {status.includes('Waiting') && <span className="loading"></span>}
+            </div>
+
             <div className="video-container">
-                <video ref={localVideoRef} autoPlay playsInline muted />
-                <video ref={remoteVideoRef} autoPlay playsInline />
+                <div className="video-wrapper">
+                    <div className="video-label">You</div>
+                    <video ref={localVideoRef} autoPlay playsInline muted />
+                </div>
+                <div className="video-wrapper">
+                    <div className="video-label">Stranger</div>
+                    <video ref={remoteVideoRef} autoPlay playsInline />
+                </div>
             </div>
 
             <div className="controls">
                 <button onClick={findMatch} disabled={!isConnected}>
-                    Start / Next
+                    {isConnected ? '🎲 Start / Next' : 'Connecting...'}
                 </button>
             </div>
         </div>
