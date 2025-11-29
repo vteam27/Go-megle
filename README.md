@@ -59,7 +59,7 @@ sequenceDiagram
 
 *   **Backend:** Go (Golang), Gorilla WebSockets
 *   **Database:** Redis (Sets, Lua Scripting, Pub/Sub, Hash persistence with TTL)
-*   **Frontend:** Vanilla JavaScript, HTML5, WebRTC API
+*   **Frontend:** React, Vite, WebRTC API
 *   **Infrastructure:** Docker, Docker Compose
 
 ---
@@ -140,7 +140,7 @@ npm ci
 npm run dev
 ```
 
-When using the Vite dev server, open the Vite URL (shown in the terminal, e.g. http://localhost:5173) to use the dev frontend, or use the Go server + Vite proxy as configured.
+When using the Vite dev server, open the Vite URL (shown in the terminal, e.g. http://localhost:5173) to use the dev frontend. Note that for the WebSocket connection to work during development, you might need to configure a proxy in `vite.config.js` or ensure the backend URL is correctly pointed to `localhost:8080`. The current implementation assumes `window.location.host` which works best when served by the Go server or when proxied.
 
 ### Run server only (after building frontend)
 
